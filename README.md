@@ -1,4 +1,4 @@
-# 🔧 Correção: app_dissertacao_codex6.py
+# 🔧 Correção: Otimizador_Geotaxi.py
 
 ## 📌 Resumo Executivo
 
@@ -11,7 +11,7 @@
 
 ## 📂 Conteúdo dos Arquivos
 
-### 1. 🐍 app_dissertacao_codex6_corrigido.py (50KB)
+### 1. 🐍 app_Otimizador_Geotaxi.py (50KB)
 **Arquivo principal corrigido**
 - Código Python completo com correção aplicada
 - Sintaxe validada
@@ -46,22 +46,22 @@
 
 ### Passo 1: Baixe o arquivo corrigido
 ```bash
-# Baixe: app_dissertacao_codex6_corrigido.py
+# Baixe: app_Otimizador_Geotaxi.py
 ```
 
 ### Passo 2: Faça backup do original
 ```bash
-cp app_dissertacao_codex6.py app_dissertacao_codex6_BACKUP.py
+cp app_Otimizador_Geotaxi.py Otimizador_Geotaxi_BACKUP.py
 ```
 
 ### Passo 3: Substitua o arquivo
 ```bash
-cp app_dissertacao_codex6_corrigido.py app_dissertacao_codex6.py
+cp app_Otimizador_Geotaxi.py Otimizador_Geotaxi.py
 ```
 
 ### Passo 4: Execute
 ```bash
-streamlit run app_dissertacao_codex6.py
+streamlit run app_Otimizador_Geotaxi.py
 ```
 
 ---
