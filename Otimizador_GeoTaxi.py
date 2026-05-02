@@ -91,10 +91,60 @@ html, body, [class*="css"]  {
     box-shadow: 0 12px 30px rgba(0,0,0,0.08);
 }
 
+/* Ajustes mobile: evita que o mapa prenda a rolagem da página */
+[data-testid="stIFrame"],
+[data-testid="stIFrame"] iframe,
+iframe {
+    max-height: min(56vh, 520px) !important;
+    border-radius: 18px !important;
+}
+
+@media (max-width: 768px) {
+    .block-container {
+        padding: 0.75rem 0.75rem 2rem !important;
+    }
+
+    .hero-box {
+        padding: 18px;
+        border-radius: 16px;
+    }
+
+    .hero-box h1 {
+        font-size: 1.45rem;
+    }
+
+    [data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+
+    [data-testid="stIFrame"],
+    [data-testid="stIFrame"] iframe,
+    iframe {
+        height: 52vh !important;
+        max-height: 52vh !important;
+        min-height: 320px !important;
+        touch-action: pan-x pinch-zoom !important;
+    }
+}
 
 </style>
 """, unsafe_allow_html=True)
 
+PONTOS_GEOGRAFICOS_INICIAIS = pd.DataFrame(
+    {
+        "bairro": [
+            "Cidade Universitária",
+            "Tabuleiro do Martins",
+            "Benedito Bentes",
+        ],
+        "lat": [-9.547402, -9.575225, -9.556168],
+        "lon": [-35.765382, -35.764116, -35.725966],
+        "peso": [392, 337, 333],
+    }
+)
+
+MAP_HEIGHT = 430
 
 
 # =========================
@@ -862,11 +912,11 @@ with col1:
 # (evita KeyError ao tentar plotar dados cartesianos no mapa geográfico e vice-versa)
 if "last_modo_cartesiano" not in st.session_state:
     st.session_state["last_modo_cartesiano"] = modo_cartesiano
-else:
-    if st.session_state["last_modo_cartesiano"] != modo_cartesiano:
-        st.session_state.pop("resultado", None)
-        st.session_state["last_modo_cartesiano"] = modo_cartesiano
+elif st.session_state["last_modo_cartesiano"] != modo_cartesiano:
+    st.session_state.pop("resultado", None)
+    st.session_state["last_modo_cartesiano"] = modo_cartesiano
 
+with col1:
     modo = st.radio(
         "Método:",
         [
@@ -985,14 +1035,7 @@ if df_inicial is None or df_inicial.empty:
             }
         )
     else:
-        df_inicial = pd.DataFrame(
-            {
-                "bairro": ["Farol", "Centro", "Trapiche"],
-                "lat": [-9.6502, -9.6658, -9.6737],
-                "lon": [-35.7352, -35.7350, -35.7486],
-                "peso": [4, 6, 5],
-            }
-        )
+        df_inicial = PONTOS_GEOGRAFICOS_INICIAIS.copy()
 
 # Editor conforme modo (com limpeza garantida antes do editor -> evita KeyError ['x','y'] / ['lat','lon'])
 if modo_cartesiano:
@@ -1531,7 +1574,7 @@ with col2:
                         fill=False,
                     ).add_to(m)
 
-        st_folium(m, width="100%", height=700)
+        st_folium(m, width="100%", height=MAP_HEIGHT)
 
     st.markdown(
         """
