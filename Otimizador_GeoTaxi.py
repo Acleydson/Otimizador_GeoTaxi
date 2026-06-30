@@ -1045,6 +1045,15 @@ def aplicar_controle_dinamico_ponto_cartesiano(df_limpo):
     if df_interativo.empty or not {"bairro", "x", "y"}.issubset(df_interativo.columns):
         return df_limpo, False, None
 
+    # Os sliders trabalham com valores decimais. Em versões recentes do pandas,
+    # atribuir floats em colunas inteiras pode gerar TypeError. Por isso, as
+    # coordenadas são convertidas explicitamente para float antes das alterações.
+    df_interativo["x"] = pd.to_numeric(df_interativo["x"], errors="coerce").astype(float)
+    df_interativo["y"] = pd.to_numeric(df_interativo["y"], errors="coerce").astype(float)
+    df_interativo = df_interativo.dropna(subset=["x", "y"]).reset_index(drop=True)
+    if df_interativo.empty:
+        return df_limpo, False, None
+
     # Quando a tabela-base muda (preset, upload ou edição manual), os sliders antigos
     # são descartados para não transportar coordenadas de uma configuração anterior.
     assinatura_base = tuple(
