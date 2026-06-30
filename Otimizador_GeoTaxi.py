@@ -432,6 +432,34 @@ def plot_losangos_pontos_demanda(ax, df_utm: pd.DataFrame, raio: float):
     ax.legend(loc="best", fontsize=9)
 
 
+def plot_losango_cobertura(ax, cx: float, cy: float, raio: float, label: str = "Bola L1 do 1-centro"):
+    """Desenha a bola L1 de cobertura centrada em um representante escolhido."""
+    r = float(raio)
+    losango = [
+        (cx + r, cy),
+        (cx, cy + r),
+        (cx - r, cy),
+        (cx, cy - r),
+        (cx + r, cy),
+    ]
+    xs, ys = zip(*losango)
+    ax.plot(xs, ys, linewidth=2.2, alpha=0.95, label=label)
+
+
+def ponto_no_segmento_otimo(regiao, t: float):
+    """Retorna o ponto obtido por interpolação linear em um segmento ótimo."""
+    if regiao is None:
+        return None
+    pts = list(regiao)
+    if len(pts) < 2:
+        return None
+    t = min(1.0, max(0.0, float(t)))
+    (x1, y1), (x2, y2) = pts[0], pts[1]
+    x = float(x1) + t * (float(x2) - float(x1))
+    y = float(y1) + t * (float(y2) - float(y1))
+    return x, y
+
+
 def plot_conjunto_otimo(ax, reg, tipo: str, **kwargs):
     """
     Plota o conjunto ótimo no modo cartesiano.
@@ -955,6 +983,164 @@ def resolver_pmediana(df: pd.DataFrame, p: int, usar_pesos: bool, modo_cartesian
     return centros_finais, df_class, (zn, zl), float(soma_obj)
 
 
+
+# =========================
+# Funções Auxiliares (interação didática no modo cartesiano)
+# =========================
+def recalcular_resultado_basico_cartesiano(df_limpo, modo, usar_pesos, center_mode):
+    """Recalcula automaticamente 1-centro ou 1-mediana no modo cartesiano.
+
+    Esta função é usada apenas para a interação didática por controles deslizantes.
+    Ela não altera os algoritmos principais; apenas atualiza o resultado exibido quando
+    os pontos de demanda são movidos no plano cartesiano.
+    """
+    df_utm, zn, zl = preparar_dados_para_modelo(df_limpo, True)
+    if df_utm is None or df_utm.empty:
+        return None
+
+    if modo == "📍 1-centro (Minimax)":
+        sol = one_center_L1_weighted(df_utm, mode=center_mode) if usar_pesos else one_center_L1_unweighted(df_utm)
+        cx, cy, R = sol["x"], sol["y"], sol["R"]
+        R_cobertura = calcular_raio_taxi(df_utm, cx, cy)
+        return {
+            "tipo": "1centro",
+            "utm_zone": (zn, zl),
+            "usar_pesos": usar_pesos,
+            "center_mode": center_mode if usar_pesos else "nao_ponderado",
+            "centro": {
+                "lat": float(cx),
+                "lon": float(cy),
+                "x_utm": float(cx),
+                "y_utm": float(cy),
+                "R_star": float(R),
+                "R_cobertura": float(R_cobertura),
+                "info": sol["info"],
+                "regiao_xy_utm": sol["regiao"],
+            },
+        }
+
+    if modo == "📍 1-mediana (Weber)":
+        x_med, y_med = one_median_L1(df_utm, usar_pesos=usar_pesos)
+        reg_weber_2 = retangulo_solucoes_weber_2pontos(df_utm) if len(df_utm) == 2 else None
+        return {
+            "tipo": "1mediana",
+            "utm_zone": (zn, zl),
+            "usar_pesos": usar_pesos,
+            "mediana": {
+                "lat": float(x_med),
+                "lon": float(y_med),
+                "x_utm": float(x_med),
+                "y_utm": float(y_med),
+                "regiao_weber2_xy_utm": reg_weber_2,
+                "custo_total": float(soma_distancias_taxi(df_utm, x_med, y_med, usar_pesos=usar_pesos)),
+            },
+        }
+
+    return None
+
+
+def aplicar_controle_dinamico_ponto_cartesiano(df_limpo):
+    """Permite mover pontos cartesianos por controles deslizantes."""
+    df_interativo = df_limpo.reset_index(drop=True).copy()
+    if df_interativo.empty or not {"bairro", "x", "y"}.issubset(df_interativo.columns):
+        return df_limpo, False, None
+
+    # Quando a tabela-base muda (preset, upload ou edição manual), os sliders antigos
+    # são descartados para não transportar coordenadas de uma configuração anterior.
+    assinatura_base = tuple(
+        (str(row["bairro"]), round(float(row["x"]), 6), round(float(row["y"]), 6))
+        for _, row in df_interativo.iterrows()
+    )
+    if st.session_state.get("assinatura_pontos_cartesianos") != assinatura_base:
+        for chave in list(st.session_state.keys()):
+            if chave.startswith("slider_x_ponto_") or chave.startswith("slider_y_ponto_"):
+                del st.session_state[chave]
+        st.session_state["assinatura_pontos_cartesianos"] = assinatura_base
+
+    st.markdown("#### Controle dinâmico dos pontos")
+    mover_pontos = st.checkbox(
+        "Mover ponto selecionado por controles",
+        value=False,
+        help="Use esta opção para deslocar pontos de demanda sem editar diretamente a tabela.",
+    )
+
+    if not mover_pontos:
+        return df_limpo, False, None
+
+    # Aplica movimentos anteriores de todos os pontos antes de calcular a janela dos sliders.
+    for i in range(len(df_interativo)):
+        chave_x = f"slider_x_ponto_{i}"
+        chave_y = f"slider_y_ponto_{i}"
+        if chave_x in st.session_state:
+            df_interativo.loc[i, "x"] = float(st.session_state[chave_x])
+        if chave_y in st.session_state:
+            df_interativo.loc[i, "y"] = float(st.session_state[chave_y])
+
+    nomes_pontos = [f"{i + 1} - {row['bairro']}" for i, row in df_interativo.iterrows()]
+    idx = st.selectbox(
+        "Ponto a mover",
+        options=list(range(len(df_interativo))),
+        format_func=lambda i: nomes_pontos[i],
+    )
+
+    x_min_dados = float(df_interativo["x"].min())
+    x_max_dados = float(df_interativo["x"].max())
+    y_min_dados = float(df_interativo["y"].min())
+    y_max_dados = float(df_interativo["y"].max())
+
+    margem_x = max(5.0, 0.75 * max(1.0, x_max_dados - x_min_dados))
+    margem_y = max(5.0, 0.75 * max(1.0, y_max_dados - y_min_dados))
+
+    x_min = float(np.floor(min(-20.0, x_min_dados - margem_x)))
+    x_max = float(np.ceil(max(20.0, x_max_dados + margem_x)))
+    y_min = float(np.floor(min(-20.0, y_min_dados - margem_y)))
+    y_max = float(np.ceil(max(20.0, y_max_dados + margem_y)))
+
+    x_atual = float(df_interativo.loc[idx, "x"])
+    y_atual = float(df_interativo.loc[idx, "y"])
+
+    col_x, col_y = st.columns(2)
+    with col_x:
+        novo_x = st.slider(
+            "Mover em X",
+            min_value=x_min,
+            max_value=x_max,
+            value=float(np.clip(x_atual, x_min, x_max)),
+            step=0.1,
+            key=f"slider_x_ponto_{idx}",
+        )
+    with col_y:
+        novo_y = st.slider(
+            "Mover em Y",
+            min_value=y_min,
+            max_value=y_max,
+            value=float(np.clip(y_atual, y_min, y_max)),
+            step=0.1,
+            key=f"slider_y_ponto_{idx}",
+        )
+
+    df_interativo.loc[idx, "x"] = float(novo_x)
+    df_interativo.loc[idx, "y"] = float(novo_y)
+
+    recalcular_auto = st.checkbox(
+        "Recalcular 1-centro/1-mediana automaticamente",
+        value=True,
+        help="Quando ativado, o resultado é atualizado a cada movimento do ponto selecionado.",
+    )
+
+    if st.button("Restaurar coordenadas da tabela"):
+        for chave in list(st.session_state.keys()):
+            if chave.startswith("slider_x_ponto_") or chave.startswith("slider_y_ponto_"):
+                del st.session_state[chave]
+        st.rerun()
+
+    st.caption(
+        f"{df_interativo.loc[idx, 'bairro']}: "
+        f"x = {float(novo_x):.2f}, y = {float(novo_y):.2f}."
+    )
+
+    return df_interativo, True, recalcular_auto
+
 # =========================
 # Interface
 # =========================
@@ -1123,6 +1309,27 @@ else:
         height=260,
     )
     df_limpo = limpar_e_normalizar_dados(df_editado)
+
+# Controle didático para mover pontos no modo cartesiano por sliders.
+# Essa interação atualiza os pontos usados no gráfico e, para 1-centro/1-mediana,
+# pode recalcular automaticamente o resultado exibido.
+controle_dinamico_ativo = False
+recalcular_dinamico_auto = False
+if modo_cartesiano and df_limpo is not None and not df_limpo.empty:
+    with col1:
+        df_limpo, controle_dinamico_ativo, recalcular_dinamico_auto = aplicar_controle_dinamico_ponto_cartesiano(df_limpo)
+
+    if controle_dinamico_ativo and recalcular_dinamico_auto:
+        resultado_dinamico = recalcular_resultado_basico_cartesiano(
+            df_limpo,
+            modo,
+            usar_pesos,
+            center_mode,
+        )
+        if resultado_dinamico is not None:
+            st.session_state["resultado"] = resultado_dinamico
+        elif modo in {"⚡ p-centro (múltiplas bases)", "⚡ p-mediana (múltiplas bases)"}:
+            st.caption("Para p-centro e p-mediana, mova os pontos e clique em Calcular Otimização para atualizar o resultado.")
 
 # Botão de cálculo (AGORA sim: para ambos os modos)
 if st.button("🚀 Calcular Otimização", type="primary"):
@@ -1374,6 +1581,30 @@ with col2:
                     value=False,
                 )
 
+            mover_representante_1centro = False
+            t_representante_1centro = 0.5
+            if (
+                resultado_atual is not None
+                and resultado_atual.get("tipo") == "1centro"
+                and resultado_atual.get("usar_pesos") is False
+            ):
+                centro_atual = resultado_atual.get("centro", {})
+                info_atual = centro_atual.get("info", {})
+                regiao_atual = centro_atual.get("regiao_xy_utm", None)
+                if info_atual.get("tipo") == "segmento" and regiao_atual is not None:
+                    mover_representante_1centro = st.checkbox(
+                        "Mover representante do 1-centro no segmento ótimo",
+                        value=False,
+                    )
+                    if mover_representante_1centro:
+                        t_representante_1centro = st.slider(
+                            "Posição do representante no segmento ótimo",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.5,
+                            step=0.01,
+                        )
+
             fig, ax = plt.subplots(figsize=(8, 8))
 
 # Título elegante
@@ -1442,19 +1673,34 @@ with col2:
                     r = ct.get("R_cobertura", 0.0)
                     r_star = ct.get("R_star", r)
 
-                    ax.scatter(cx, cy, s=200)
+                    tipo = ct.get("info", {}).get("tipo", "ponto")
+                    regiao = ct.get("regiao_xy_utm", None)
+
+                    ponto_movel = None
+                    if mover_representante_1centro and tipo == "segmento":
+                        ponto_movel = ponto_no_segmento_otimo(regiao, t_representante_1centro)
+                        if ponto_movel is not None:
+                            cx, cy = ponto_movel
+                            # Todos os pontos do segmento ótimo têm o mesmo raio ótimo no caso não ponderado.
+                            # O cálculo abaixo mantém a visualização robusta a arredondamentos numéricos.
+                            r = calcular_raio_taxi(df_utm, cx, cy)
+
+                    ax.scatter(cx, cy, s=220, marker="X" if mover_representante_1centro else "o")
 
                     if mostrar_losangos_demanda:
                         plot_losangos_pontos_demanda(ax, df_utm, r_star)
                     else:
-                        # losango mínimo (raio)
-                        losango = [(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r), (cx + r, cy)]
-                        xs, ys = zip(*losango)
-                        ax.plot(xs, ys)
+                        # Bola L1 de cobertura centrada no representante escolhido do 1-centro.
+                        # Quando o representante é movido pelo controle deslizante, esse losango o acompanha.
+                        plot_losango_cobertura(
+                            ax,
+                            cx,
+                            cy,
+                            r,
+                            label="Bola L1 do representante do 1-centro",
+                        )
 
                     # conjunto ótimo degenerado (segmento/ponto/região)
-                    tipo = ct.get("info", {}).get("tipo", "ponto")
-                    regiao = ct.get("regiao_xy_utm", None)
                     plot_conjunto_otimo(ax, regiao, tipo, linestyle="--")
 
                 elif res["tipo"] == "1mediana":
@@ -1479,6 +1725,22 @@ with col2:
                     f"Comparação didática: distância euclidiana = {dist_euclidiana:.2f}; "
                     f"distância do táxi = {dist_taxi:.2f}."
                 )
+
+            if mover_representante_1centro and "resultado" in st.session_state:
+                res_movel = st.session_state["resultado"]
+                if res_movel.get("tipo") == "1centro":
+                    ct_movel = res_movel.get("centro", {})
+                    regiao_movel = ct_movel.get("regiao_xy_utm", None)
+                    ponto_movel_caption = ponto_no_segmento_otimo(regiao_movel, t_representante_1centro)
+                    if ponto_movel_caption is not None:
+                        px, py = ponto_movel_caption
+                        raio_movel = calcular_raio_taxi(df_utm, px, py)
+                        st.caption(
+                            f"Representante escolhido no segmento ótimo: "
+                            f"t = {t_representante_1centro:.2f}, "
+                            f"P = ({px:.2f}, {py:.2f}), "
+                            f"raio de cobertura = {raio_movel:.2f}."
+                        )
 
     # =========================
     # MODO GEOGRÁFICO (FOLIUM)
