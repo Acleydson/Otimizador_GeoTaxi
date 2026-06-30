@@ -131,7 +131,7 @@ iframe {
 </style>
 """, unsafe_allow_html=True)
 
-PONTOS_GEOGRAFICOS_INICIAIS = pd.DataFrame(
+PONTOS_GEOGRAFICOS_PADRAO = pd.DataFrame(
     {
         "bairro": [
             "Cidade Universitária",
@@ -143,6 +143,68 @@ PONTOS_GEOGRAFICOS_INICIAIS = pd.DataFrame(
         "peso": [392, 337, 333],
     }
 )
+
+
+def _get_query_param(nome: str):
+    """Lê parâmetros da URL, com compatibilidade entre versões do Streamlit."""
+    try:
+        valor = st.query_params.get(nome)
+    except Exception:
+        try:
+            params = st.experimental_get_query_params()
+            valor = params.get(nome)
+        except Exception:
+            valor = None
+
+    if isinstance(valor, list):
+        return valor[0] if valor else None
+    return valor
+
+
+def carregar_pontos_geograficos_iniciais() -> pd.DataFrame:
+    """
+    Permite que o wrapper Android envie pontos iniciais pela URL.
+
+    Formato esperado:
+    ?initial_points=Bairro,lat,lon,peso|Outro bairro,lat,lon,peso
+    """
+    raw = _get_query_param("initial_points")
+    if not raw:
+        return PONTOS_GEOGRAFICOS_PADRAO.copy()
+
+    linhas = []
+    for item in str(raw).split("|"):
+        item = item.strip()
+        if not item:
+            continue
+
+        partes = item.rsplit(",", 3)
+        if len(partes) != 4:
+            continue
+
+        bairro, lat, lon, peso = partes
+        try:
+            linhas.append(
+                {
+                    "bairro": bairro.strip() or f"Ponto {len(linhas) + 1}",
+                    "lat": float(str(lat).strip().replace(",", ".")),
+                    "lon": float(str(lon).strip().replace(",", ".")),
+                    "peso": float(str(peso).strip().replace(",", ".")),
+                }
+            )
+        except ValueError:
+            continue
+
+    if not linhas:
+        return PONTOS_GEOGRAFICOS_PADRAO.copy()
+
+    df = pd.DataFrame(linhas)
+    df["peso"] = pd.to_numeric(df["peso"], errors="coerce").fillna(1)
+    df.loc[df["peso"] <= 0, "peso"] = 1
+    return df[["bairro", "lat", "lon", "peso"]]
+
+
+PONTOS_GEOGRAFICOS_INICIAIS = carregar_pontos_geograficos_iniciais()
 
 MAP_HEIGHT = 430
 
