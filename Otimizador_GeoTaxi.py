@@ -131,7 +131,7 @@ iframe {
 </style>
 """, unsafe_allow_html=True)
 
-PONTOS_GEOGRAFICOS_PADRAO = pd.DataFrame(
+PONTOS_GEOGRAFICOS_INICIAIS = pd.DataFrame(
     {
         "bairro": [
             "Cidade Universitária",
@@ -143,68 +143,6 @@ PONTOS_GEOGRAFICOS_PADRAO = pd.DataFrame(
         "peso": [392, 337, 333],
     }
 )
-
-
-def _get_query_param(nome: str):
-    """Lê parâmetros da URL, com compatibilidade entre versões do Streamlit."""
-    try:
-        valor = st.query_params.get(nome)
-    except Exception:
-        try:
-            params = st.experimental_get_query_params()
-            valor = params.get(nome)
-        except Exception:
-            valor = None
-
-    if isinstance(valor, list):
-        return valor[0] if valor else None
-    return valor
-
-
-def carregar_pontos_geograficos_iniciais() -> pd.DataFrame:
-    """
-    Permite que o wrapper Android envie pontos iniciais pela URL.
-
-    Formato esperado:
-    ?initial_points=Bairro,lat,lon,peso|Outro bairro,lat,lon,peso
-    """
-    raw = _get_query_param("initial_points")
-    if not raw:
-        return PONTOS_GEOGRAFICOS_PADRAO.copy()
-
-    linhas = []
-    for item in str(raw).split("|"):
-        item = item.strip()
-        if not item:
-            continue
-
-        partes = item.rsplit(",", 3)
-        if len(partes) != 4:
-            continue
-
-        bairro, lat, lon, peso = partes
-        try:
-            linhas.append(
-                {
-                    "bairro": bairro.strip() or f"Ponto {len(linhas) + 1}",
-                    "lat": float(str(lat).strip().replace(",", ".")),
-                    "lon": float(str(lon).strip().replace(",", ".")),
-                    "peso": float(str(peso).strip().replace(",", ".")),
-                }
-            )
-        except ValueError:
-            continue
-
-    if not linhas:
-        return PONTOS_GEOGRAFICOS_PADRAO.copy()
-
-    df = pd.DataFrame(linhas)
-    df["peso"] = pd.to_numeric(df["peso"], errors="coerce").fillna(1)
-    df.loc[df["peso"] <= 0, "peso"] = 1
-    return df[["bairro", "lat", "lon", "peso"]]
-
-
-PONTOS_GEOGRAFICOS_INICIAIS = carregar_pontos_geograficos_iniciais()
 
 MAP_HEIGHT = 430
 
@@ -424,6 +362,75 @@ def mediana_ponderada_1d(vals: np.ndarray, pesos: np.ndarray):
 
 def distancia_taxi_xy(x1: float, y1: float, x2: float, y2: float) -> float:
     return float(abs(float(x1) - float(x2)) + abs(float(y1) - float(y2)))
+
+
+def plot_comparacao_euclidiana_taxi(ax, df_utm: pd.DataFrame):
+    """
+    Desenha, para exatamente dois pontos cartesianos, o segmento euclidiano
+    e um percurso ortogonal que realiza a distancia do taxi.
+    """
+    if len(df_utm) != 2:
+        return None
+
+    pts = df_utm[["x_utm", "y_utm"]].to_numpy(dtype=float)
+    (x1, y1), (x2, y2) = pts[0], pts[1]
+    xe, ye = x2, y1
+
+    dist_euclidiana = float(np.hypot(x2 - x1, y2 - y1))
+    dist_taxi = distancia_taxi_xy(x1, y1, x2, y2)
+
+    ax.plot(
+        [x1, x2],
+        [y1, y2],
+        color="#111827",
+        linestyle="--",
+        linewidth=1.8,
+        label=f"Euclidiana = {dist_euclidiana:.2f}",
+    )
+
+    ax.plot(
+        [x1, xe, x2],
+        [y1, ye, y2],
+        color="#f97316",
+        linewidth=2.4,
+        marker=">",
+        markevery=[1, 2],
+        label=f"Taxi L1 = {dist_taxi:.2f}",
+    )
+
+    ax.scatter([xe], [ye], color="#f97316", s=45, zorder=4)
+    ax.legend(loc="best", fontsize=9)
+
+    return dist_euclidiana, dist_taxi
+
+
+def plot_losangos_pontos_demanda(ax, df_utm: pd.DataFrame, raio: float):
+    """Desenha bolas L1 de mesmo raio centradas nos pontos de demanda."""
+    cores = ["#2563eb", "#16a34a", "#dc2626", "#9333ea"]
+    for idx, row in df_utm.reset_index(drop=True).iterrows():
+        cx = float(row["x_utm"])
+        cy = float(row["y_utm"])
+        r = float(raio)
+        losango = [
+            (cx + r, cy),
+            (cx, cy + r),
+            (cx - r, cy),
+            (cx, cy - r),
+            (cx + r, cy),
+        ]
+        xs, ys = zip(*losango)
+        nome = str(row.get("bairro", f"Ponto {idx + 1}"))
+        ax.plot(
+            xs,
+            ys,
+            color=cores[idx % len(cores)],
+            linewidth=1.8,
+            alpha=0.75,
+            linestyle=":",
+            label=f"Bola L1 de {nome}",
+        )
+    ax.legend(loc="best", fontsize=9)
+
 
 def plot_conjunto_otimo(ax, reg, tipo: str, **kwargs):
     """
@@ -1347,6 +1354,26 @@ with col2:
                 ylim = st.slider("Janela em Y", min_value=float(y0 - 2*dy), max_value=float(y1 + 2*dy),
                                  value=(float(y0), float(y1)))
 
+            mostrar_comparacao_distancias = False
+            if len(df_utm) == 2:
+                mostrar_comparacao_distancias = st.checkbox(
+                    "Mostrar comparação entre distância euclidiana e distância do táxi",
+                    value=False,
+                )
+
+            mostrar_losangos_demanda = False
+            resultado_atual = st.session_state.get("resultado")
+            if (
+                resultado_atual is not None
+                and resultado_atual.get("tipo") == "1centro"
+                and resultado_atual.get("usar_pesos") is False
+                and 2 <= len(df_utm) <= 4
+            ):
+                mostrar_losangos_demanda = st.checkbox(
+                    "Mostrar losangos centrados nos pontos de demanda",
+                    value=False,
+                )
+
             fig, ax = plt.subplots(figsize=(8, 8))
 
 # Título elegante
@@ -1381,6 +1408,9 @@ with col2:
                 linewidth=0.8
             )
 
+            distancias_comparadas = None
+            if mostrar_comparacao_distancias:
+                distancias_comparadas = plot_comparacao_euclidiana_taxi(ax, df_utm)
 
             if "resultado" in st.session_state:
                 res = st.session_state["resultado"]
@@ -1410,13 +1440,17 @@ with col2:
                     cx = ct["x_utm"]
                     cy = ct["y_utm"]
                     r = ct.get("R_cobertura", 0.0)
+                    r_star = ct.get("R_star", r)
 
                     ax.scatter(cx, cy, s=200)
 
-                    # losango mínimo (raio)
-                    losango = [(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r), (cx + r, cy)]
-                    xs, ys = zip(*losango)
-                    ax.plot(xs, ys)
+                    if mostrar_losangos_demanda:
+                        plot_losangos_pontos_demanda(ax, df_utm, r_star)
+                    else:
+                        # losango mínimo (raio)
+                        losango = [(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r), (cx + r, cy)]
+                        xs, ys = zip(*losango)
+                        ax.plot(xs, ys)
 
                     # conjunto ótimo degenerado (segmento/ponto/região)
                     tipo = ct.get("info", {}).get("tipo", "ponto")
@@ -1438,6 +1472,13 @@ with col2:
             ax.set_aspect("equal", adjustable="box")
             ax.grid(True)
             st.pyplot(fig)
+
+            if distancias_comparadas is not None:
+                dist_euclidiana, dist_taxi = distancias_comparadas
+                st.caption(
+                    f"Comparação didática: distância euclidiana = {dist_euclidiana:.2f}; "
+                    f"distância do táxi = {dist_taxi:.2f}."
+                )
 
     # =========================
     # MODO GEOGRÁFICO (FOLIUM)
